@@ -105,9 +105,25 @@ a recursive grep here would take far too long.
 # 启发式层单元测试（Node >= 22.6，28 个用例）
 node tests/test-extension.mjs
 
-# 精准层端到端测试（Git Bash，18 个用例）
+# 精准层端到端测试（Git Bash，28 个用例，含 grep→rg 翻译）
 bash tests/test-shims.sh
+
+# grep→rg 翻译的差分测试：71 组命令分别用真 GNU grep 和翻译后的 rg 跑，
+# 逐行对比输出，退出码也必须一致（Git Bash）
+bash tests/test-translation-diff.sh
 ```
+
+差分测试覆盖：单文件/多文件/递归、隐藏目录、`.gitignore` 不生效验证、
+`-i -n -l -c -v -x -o -w -h -H -m -A -B -C -q -s`、多个 `-e`、`-f`、
+`--include/--exclude/--exclude-dir`、短选项组合（`-rin -nc -on -iv`）、
+ERE（`-E`/`egrep`）、字面量（`-F`/`fgrep`）、BRE 回退验证（`a\{2\}`、裸 `|`、`(...)`）、
+stdin、无匹配退出码等。
+
+**保真度策略：能精确等价才翻译，否则回退真 grep**，所以行为永远不坏。
+已知的有意差异：多文件时 rg 的并行输出顺序可能与 grep 的参数顺序不同
+（内容完全一致，测试按排序后的行集合对比）；`grep pattern 目录`（不带 -r）
+按递归搜索处理（GNU grep 会报 "Is a directory"，但递归搜才是真实意图）；
+`-L`、`-f`（非 fgrep）因退出码/正则方言差异直接回退真 grep。
 
 测试会把条目上限降到 50，并自建"小项目/66 条目大目录"的临时树，不依赖真实环境。
 

@@ -59,6 +59,20 @@ if [ -z "${__SG_LOADED:-}" ]; then
 		return 1
 	}
 
+	__sg_has_bre_escape() {
+		# Return 0 if the pattern cannot be mapped to rg's regex faithfully.
+		# Covers BRE escapes (\{ \} \( \) \| \+ \? \1-9 \n \t ...) AND chars
+		# that are literal in BRE but metacharacters in rg: ( ) { } | + ?
+		local p="$1" s
+		for s in '\(' '\)' '\{' '\}' '\|' '\+' '\?' '(' ')' '{' '}' '|' '+' '?'; do
+			[[ "$p" == *"$s"* ]] && return 0
+		done
+		for s in 0 1 2 3 4 5 6 7 8 9 n t r f v a e x c; do
+			[[ "$p" == *"\\$s"* ]] && return 0
+		done
+		return 1
+	}
+
 	__sg_find_rg() {
 		[ -n "$__sg_rg_path" ] && return 0
 		__sg_rg_path="$(PATH="$__sg_clean_path" type -P rg 2>/dev/null)"
@@ -71,9 +85,9 @@ if [ -z "${__SG_LOADED:-}" ]; then
 	__sg_grep_to_rg() {
 		local flavor="$1"
 		shift
-		local -a args=() paths=()
+		local -a args=() paths=() e_patterns=()
 		local fixed=0 pcre=0 has_pattern=0 pattern="" a i ch
-		local recurse=0 fn_explicit=0
+		local recurse=0 fn_explicit=0 count_flag=0 ere=0
 
 		[ "$flavor" = "fgrep" ] && fixed=1
 
@@ -93,11 +107,13 @@ if [ -z "${__SG_LOADED:-}" ]; then
 				done
 				;;
 			-e)
-				pattern="$1"
+				e_patterns+=("$1")
 				has_pattern=1
 				shift
 				;;
 			-f)
+				# grep -f reads patterns as BRE; rg -f as regex. Only safe for fgrep -f.
+				[ "$flavor" = "fgrep" ] || return 1
 				args+=(-f "$1")
 				has_pattern=1
 				shift
@@ -118,8 +134,11 @@ if [ -z "${__SG_LOADED:-}" ]; then
 				args+=(-H)
 				fn_explicit=1 ;;
 			--files-with-matches) args+=(-l) ;;
-			--files-without-match) args+=(--files-without-match) ;;
-			--count) args+=(-c) ;;
+			--files-without-match) return 1 ;; # -L exit codes differ between grep/rg
+			--count)
+				args+=(-c)
+				count_flag=1
+				;;
 			--invert-match) args+=(-v) ;;
 			--line-regexp) args+=(-x) ;;
 			--only-matching) args+=(-o) ;;
@@ -127,14 +146,15 @@ if [ -z "${__SG_LOADED:-}" ]; then
 			--no-messages) args+=(--no-messages) ;;
 			--text) args+=(-a) ;;
 			--fixed-strings) fixed=1 ;;
-			--extended-regexp) ;; # rg's default regex covers ERE
+			--extended-regexp) ere=1 ;; # rg's default regex covers ERE
 			--perl-regexp) pcre=1 ;;
 			--regexp)
-				pattern="$1"
+				e_patterns+=("$1")
 				has_pattern=1
 				shift
 				;;
 			--file)
+				[ "$flavor" = "fgrep" ] || return 1
 				args+=(-f "$1")
 				has_pattern=1
 				shift
@@ -189,15 +209,18 @@ if [ -z "${__SG_LOADED:-}" ]; then
 						singles+=(-I)
 						fn_explicit=1 ;;
 					l) singles+=(-l) ;;
-					L) singles+=(--files-without-match) ;;
-					c) singles+=(-c) ;;
+					L) return 1 ;; # -L exit codes differ between grep/rg; use real grep
+					c)
+						singles+=(-c)
+						count_flag=1 ;;
 					v) singles+=(-v) ;;
 					x) singles+=(-x) ;;
 					o) singles+=(-o) ;;
-					q | s) singles+=(-q) ;;
+					q) singles+=(-q) ;;
+					s) singles+=(--no-messages) ;;
 					a) singles+=(-a) ;;
 					F) fixed=1 ;;
-					E) ;;
+					E) ere=1 ;;
 					P) pcre=1 ;;
 					Z | 0) singles+=(-0) ;;
 					*) expanded=1 ;; # unknown letter: bail
@@ -223,6 +246,20 @@ if [ -z "${__SG_LOADED:-}" ]; then
 		[ $has_pattern -eq 0 ] && return 1
 		__sg_find_rg || return 1
 
+		# GNU grep's default mode is BRE, rg has no BRE mode. Some escape
+		# sequences mean different things (\{ \} \( \) \| \+ \? \1-9 \n \t ...):
+		# bail so the real grep handles them. (ERE/-P/-F modes are compatible.)
+		if [ $fixed -eq 0 ] && [ $pcre -eq 0 ] && [ "$flavor" = "grep" ] && [ $ere -eq 0 ]; then
+			if __sg_has_bre_escape "$pattern"; then
+				return 1
+			fi
+			for __sg_p in "${e_patterns[@]:+${e_patterns[@]}}"; do
+				if __sg_has_bre_escape "$__sg_p"; then
+					return 1
+				fi
+			done
+		fi
+
 		# --no-config: user's ripgrep config (e.g. default --type filters) must
 		# not change grep semantics. grep -r walks hidden dirs and ignores
 		# .gitignore; keep that behavior too.
@@ -244,7 +281,15 @@ if [ -z "${__SG_LOADED:-}" ]; then
 			fi
 		fi
 		final+=("${args[@]:+${args[@]}}")
-		final+=(-e "$pattern")
+		[ $count_flag -eq 1 ] && [ ${#paths[@]} -gt 0 ] && final+=(--include-zero)
+		if [ ${#e_patterns[@]} -gt 0 ]; then
+			[ -n "$pattern" ] && e_patterns=("$pattern" "${e_patterns[@]}")
+			for __sg_p in "${e_patterns[@]}"; do
+				final+=(-e "$__sg_p")
+			done
+		elif [ -n "$pattern" ]; then
+			final+=(-e "$pattern")
+		fi
 		final+=("${paths[@]:+${paths[@]}}")
 		__sg_rg_args=("${final[@]}")
 		return 0
