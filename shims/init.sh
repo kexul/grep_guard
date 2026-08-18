@@ -374,14 +374,57 @@ if [ -z "${__SG_LOADED:-}" ]; then
 		return 0
 	}
 
+	__sg_strict_ok() {
+		# Minimal-core whitelist for SEARCH_GUARD_GREP_AS_RG=strict: only flag
+		# combinations whose equivalence can be argued case by case, a pattern
+		# restricted to a safe charset, and existing targets.
+		local flavor="$1"
+		shift
+		local pat_count=0 p rest
+		local re='^[A-Za-z0-9 _.,:;@%+=/^$*-]+$'
+		for p in "$@"; do
+			case "$p" in
+			--) ;;
+			-r | -R | -i | -n | -l | -w | -H | -h | --recursive | --ignore-case | \
+				--line-number | --files-with-matches | --word-regexp | \
+				--with-filename | --no-filename) ;;
+			-*)
+				# clusters built only from whitelisted letters (e.g. -rin)
+				rest="${p#-}"
+				[[ "$rest" =~ ^[rinwlhH]+$ ]] || return 1
+				;;
+			*)
+				if [ $pat_count -eq 0 ]; then
+					pat_count=1
+					[[ "$p" =~ $re ]] || return 1
+				else
+					[ -e "$p" ] || return 1
+				fi
+				;;
+			esac
+		done
+		[ $pat_count -eq 1 ] || return 1
+		return 0
+	}
+
 	__sg_run_grep() {
 		# $1 = flavor (grep|egrep|fgrep), rest = argv. Guard already ran.
 		local flavor="$1"
 		shift
-		if [ "${SEARCH_GUARD_GREP_AS_RG:-1}" != "0" ] && __sg_grep_to_rg "$flavor" "$@"; then
+		local mode="${SEARCH_GUARD_GREP_AS_RG:-1}" translate=0
+		case "$mode" in
+		0) translate=0 ;;
+		strict) __sg_strict_ok "$flavor" "$@" && translate=1 ;;
+		*) translate=1 ;;
+		esac
+		if [ $translate -eq 1 ] && __sg_grep_to_rg "$flavor" "$@"; then
+			[ -n "${SEARCH_GUARD_DEBUG:-}" ] &&
+				echo "[search-guard] translated to: $__sg_rg_path ${__sg_rg_args[*]}" >&2
 			__SG_PROBED=1 command "$__sg_rg_path" "${__sg_rg_args[@]}"
 			return $?
 		fi
+		[ -n "${SEARCH_GUARD_DEBUG:-}" ] &&
+			echo "[search-guard] fallback to real $flavor" >&2
 		__SG_PROBED=1 PATH="$__sg_clean_path" command "$flavor" "$@"
 	}
 

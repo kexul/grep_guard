@@ -58,6 +58,18 @@ pi 扩展（`extension/search-guard.ts`）在 `tool_call` 事件解析命令文�
 
 典型效果：agent 写 `grep -rn TODO .` ，自动获得 ~50 倍速度，并且先过守卫探测。
 
+## 一致性的层次（为什么不能"逐字节完全一致"）
+
+rg 与 grep 是两个独立实现（不同正则引擎/并发模型/错误消息），任意输入的
+逐字节等价原理上不可达。可达的是三个层次，grep_guard 同时提供：
+
+1. **回退 = 构造上 100% 一致**：所有拿不准的构造跑的是同一个真 grep 二进制，恒等
+2. **全量模式（默认）**：已验证等价的构造翻译为 rg，以差分+模糊测试持续回归
+3. **strict 模式**：把被翻译面收缩到最小核心（白名单标志 + 安全字符集模式），
+   每一条等价性都可逐条论证，适合对一致性要求最高的场合
+
+剩余不可消除的已知差异：多文件时 rg 并行输出的文件顺序（内容一致，按行集合对比）。
+
 ## 安装（pi）
 
 ```bash
@@ -86,7 +98,7 @@ cp -r shims ~/.pi/agent/shims
 | `SEARCH_GUARD_ENTRY_CAP` | 按工具 | 条目数上限（同时覆盖所有工具）。默认按工具区分：`grep/egrep/fgrep` 10000（实测 ~2.4ms/文件），`rg/ag/find` 100000（快 ~50-100 倍），`ls -R`/`dir /s`/`Get-ChildItem -Recurse` 20000 |
 | `SEARCH_GUARD_TIME_BUDGET_MS` | `2000` | 单次探测时间预算 |
 | `SEARCH_GUARD_SHIM_DIR` | `~/.pi/agent/shims` | shims 目录位置 |
-| `SEARCH_GUARD_GREP_AS_RG` | 启用 | `=0` 关闭 grep→rg 透明翻译 |
+| `SEARCH_GUARD_GREP_AS_RG` | 全量 | grep→rg 翻译模式：默认全量翻译（能等价才翻，否则回退）；`strict` 只翻译最小核心（`-r -i -n -l -w -H` 及其组合 + 安全字符集模式 + 已存在目标），其余全部回退真 grep；`0` 关闭翻译 |
 | `SEARCH_GUARD_OFF` | - | `=1` 时完全禁用守卫（模型被拦截时也会被告知这个逃生门） |
 
 被拦截时模型收到的消息形如：

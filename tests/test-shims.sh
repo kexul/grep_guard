@@ -94,6 +94,26 @@ t_out "fgrep 字面量匹配" "TODO*.magic" "fgrep 'TODO*.magic' ./src/c.txt"
 t_out "--include 转为 -g" "src/a.ts:1:TODO a" "grep -rn --include='*.ts' TODO ./src"
 t_out "grep 翻译后仍受守卫保护" "[search-guard] Blocked" "grep -r TODO '$BIG' 2>&1"
 
+# --- strict mode: minimal whitelist only, everything else falls back ---
+t_route() { # t_route <desc> <expect: translated|fallback> <command...>
+	local desc="$1" expect="$2"; shift 2
+	local err got
+	err=$(cd "$PROJ" && SEARCH_GUARD_DEBUG=1 bash -c "SEARCH_GUARD_GREP_AS_RG=strict $*" 2>&1 >/dev/null)
+	got=fallback
+	[[ "$err" == *"translated to"* ]] && got=translated
+	if [ "$got" = "$expect" ]; then pass=$((pass+1)); echo "PASS | $desc"
+	else fail=$((fail+1)); echo "FAIL | $desc (expect=$expect got=$got)"; fi
+}
+
+t_route "strict: 核心 -rn 被翻译" translated "grep -rn TODO ./src"
+t_route "strict: 核心 -ilw 簇被翻译" translated "grep -rin TODO ./src/a.ts"
+t_route "strict: -c 回退" fallback "grep -c TODO src/a.ts"
+t_route "strict: -E 回退" fallback "grep -E 'TODO' src/a.ts"
+t_route "strict: 反斜杠模式回退" fallback "grep 'TODO\\s' src/a.ts"
+t_route "strict: 缺失目标回退" fallback "grep TODO no_such_file.xyz"
+t_route "strict: --include 回退" fallback "grep -rn --include='*.ts' TODO ./src"
+t_out "strict: 翻译结果仍正确" "src/a.ts:1:TODO a" "SEARCH_GUARD_GREP_AS_RG=strict grep -rn TODO ./src"
+
 echo
 echo "pass=$pass fail=$fail"
 rm -rf "$BASE"
