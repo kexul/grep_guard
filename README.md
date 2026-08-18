@@ -47,6 +47,17 @@ pi 扩展（`extension/search-guard.ts`）在 `tool_call` 事件解析命令文�
 
 所有放行的递归搜索若未指定超时，自动注入 60 秒 timeout。
 
+### 附赠：grep → rg 透明加速
+
+实测数据（Windows/NTFS，15000 个文件）：`grep -r` 耗时 6.3 秒（~2.4ms/文件），`rg` 只需 0.14 秒——慢 45 倍。因此 `grep`/`egrep`/`fgrep` 调用会被**透明翻译成等价的 rg**：
+
+- 覆盖常用标志：`-r -i -w -n -l -c -v -x -o -q -m -A -B -C -e -f -F -E -P -H -h -Z`、`--include/--exclude/--exclude-dir`、短选项组合（`-rin`）等
+- 语义对齐：`--no-config`（忽略 ripgrep 配置）、`--hidden --no-ignore`（等价 grep -r 扫隐藏目录/无视 .gitignore）、grep 的文件名显示规则（单文件不加前缀、多文件/递归加前缀）、`--path-separator //`（防 MSYS 路径转换）
+- 翻译不了的构造（未知标志等）**自动回退到真 grep**，行为永远不壊
+- `SEARCH_GUARD_GREP_AS_RG=0` 可关闭翻译
+
+典型效果：agent 写 `grep -rn TODO .` ，自动获得 ~50 倍速度，并且先过守卫探测。
+
 ## 安装（pi）
 
 ```bash
@@ -75,7 +86,8 @@ cp -r shims ~/.pi/agent/shims
 | `SEARCH_GUARD_ENTRY_CAP` | 按工具 | 条目数上限（同时覆盖所有工具）。默认按工具区分：`grep/egrep/fgrep` 10000（实测 ~2.4ms/文件），`rg/ag/find` 100000（快 ~50-100 倍），`ls -R`/`dir /s`/`Get-ChildItem -Recurse` 20000 |
 | `SEARCH_GUARD_TIME_BUDGET_MS` | `2000` | 单次探测时间预算 |
 | `SEARCH_GUARD_SHIM_DIR` | `~/.pi/agent/shims` | shims 目录位置 |
-| `SEARCH_GUARD_OFF` | - | `=1` 时完全禁用（模型被拦截时也会被告知这个逃生门） |
+| `SEARCH_GUARD_GREP_AS_RG` | 启用 | `=0` 关闭 grep→rg 透明翻译 |
+| `SEARCH_GUARD_OFF` | - | `=1` 时完全禁用守卫（模型被拦截时也会被告知这个逃生门） |
 
 被拦截时模型收到的消息形如：
 
@@ -106,6 +118,8 @@ bash tests/test-shims.sh
 | 每条 bash 命令（BASH_ENV 加载） | ~0.1s |
 | 递归搜索（probe，node 启动） | ~0.2–0.3s |
 | 非递归 grep（快速路径，不启 node） | 近乎 0 |
+
+翻译为 rg 后，递归搜索本身的耗时反而从分钟级降到秒级。
 
 ## 已知限制
 

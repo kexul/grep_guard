@@ -1,6 +1,6 @@
 #!/bin/bash
-# End-to-end tests for the PRECISE layer (BASH_ENV functions + PATH shims).
-# Requires Git Bash and node.
+# End-to-end tests for the PRECISE layer (BASH_ENV functions + PATH shims)
+# and the grep->rg translation. Requires Git Bash and node.
 #
 # Run:  bash tests/test-shims.sh
 #
@@ -17,7 +17,10 @@ export SEARCH_GUARD_TIME_BUDGET_MS=10000
 BASE=$(mktemp -d)
 PROJ="$BASE/project"; BIG="$BASE/big"
 mkdir -p "$PROJ/src"
-echo "TODO a" > "$PROJ/src/a.ts"; echo hello > "$PROJ/README.md"
+echo "TODO a" > "$PROJ/src/a.ts"
+echo "TODO b" > "$PROJ/src/b.ts"
+echo "hello" > "$PROJ/README.md"
+echo 'TODO*.magic' > "$PROJ/src/c.txt"
 for d in 0 1 2 3 4 5; do
 	mkdir -p "$BIG/d$d"
 	for f in $(seq 0 9); do echo x > "$BIG/d$d/f$f.txt"; done
@@ -46,6 +49,14 @@ shim_only() { # invoke via `command` to bypass the wrapper functions
 	else fail=$((fail+1)); echo "FAIL | $desc (expect=$expect got=$got rc=$rc)"; echo "     stderr: $err"; fi
 }
 
+t_out() { # t_out <desc> <needle> <command...>: stdout must contain <needle>
+	local desc="$1" needle="$2"; shift 2
+	local out rc
+	out=$(cd "$PROJ" && bash -c "$*" 2>/dev/null); rc=$?
+	if [[ "$out" == *"$needle"* ]]; then pass=$((pass+1)); echo "PASS | $desc"
+	else fail=$((fail+1)); echo "FAIL | $desc (rc=$rc)"; echo "     output: '$out' want substring: '$needle'"; fi
+}
+
 # --- wrapper functions (final argv, precise) ---
 t "变量间接引用(静态解析做不到)" blocked "D='$BIG'; rg TODO \"\$D\""
 t "cd 变量 && 相对路径" blocked "D='$BIG'; cd \"\$D\" && rg TODO ."
@@ -67,6 +78,21 @@ shim_only "command rg 绕过函数走 shim" blocked "rg TODO '$BIG'"
 shim_only "command rg 小目录" allowed "rg TODO '$PROJ/src'"
 t "xargs 调起的 rg" blocked "echo '$BIG' | xargs -I{} rg TODO {}"
 t "xargs 传具体文件放行" allowed "find '$BIG/d0' -name 'f0.txt' | xargs grep x"
+
+# --- grep -> rg translation ---
+# grep is transparently rewritten to the much faster rg (--no-config, so the
+# user's ripgrep config cannot change grep semantics); anything
+# untranslatable falls back to the real grep.
+t_out "grep -rn 翻译为 rg" "src/a.ts:1:TODO a" "grep -rn TODO ./src"
+t_out "grep -i 忽略大小写" "src/a.ts:1:TODO a" "grep -in todo ./src"
+t_out "grep -l 只列文件名" "src/a.ts" "grep -l TODO ./src"
+t_out "grep -c 计数" "1" "grep -c TODO ./src/a.ts"
+t_out "组合短选项 -irn" "src/a.ts:1:TODO a" "grep -irn todo ./src"
+t_out "不支持的标志回退真 grep" "src/a.ts:1:TODO a" "grep -rn --line-buffered TODO ./src"
+t_out "SEARCH_GUARD_GREP_AS_RG=0 禁用翻译" "src/a.ts:1:TODO a" "SEARCH_GUARD_GREP_AS_RG=0 grep -rn TODO ./src"
+t_out "fgrep 字面量匹配" "TODO*.magic" "fgrep 'TODO*.magic' ./src/c.txt"
+t_out "--include 转为 -g" "src/a.ts:1:TODO a" "grep -rn --include='*.ts' TODO ./src"
+t_out "grep 翻译后仍受守卫保护" "[search-guard] Blocked" "grep -r TODO '$BIG' 2>&1"
 
 echo
 echo "pass=$pass fail=$fail"
