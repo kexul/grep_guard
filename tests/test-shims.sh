@@ -84,8 +84,8 @@ t "xargs 传具体文件放行" allowed "find '$BIG/d0' -name 'f0.txt' | xargs g
 # user's ripgrep config cannot change grep semantics); anything
 # untranslatable falls back to the real grep.
 t_out "grep -rn 翻译为 rg" "src/a.ts:1:TODO a" "grep -rn TODO ./src"
-t_out "grep -i 忽略大小写" "src/a.ts:1:TODO a" "grep -in todo ./src"
-t_out "grep -l 只列文件名" "src/a.ts" "grep -l TODO ./src"
+t_out "grep -i 忽略大小写" "src/a.ts:1:TODO a" "grep -irn todo ./src"
+t_out "grep -l 只列文件名" "src/a.ts" "grep -rl TODO ./src"
 t_out "grep -c 计数" "1" "grep -c TODO ./src/a.ts"
 t_out "组合短选项 -irn" "src/a.ts:1:TODO a" "grep -irn todo ./src"
 t_out "不支持的标志回退真 grep" "src/a.ts:1:TODO a" "grep -rn --line-buffered TODO ./src"

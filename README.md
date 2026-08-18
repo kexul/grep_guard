@@ -108,9 +108,13 @@ node tests/test-extension.mjs
 # 精准层端到端测试（Git Bash，28 个用例，含 grep→rg 翻译）
 bash tests/test-shims.sh
 
-# grep→rg 翻译的差分测试：71 组命令分别用真 GNU grep 和翻译后的 rg 跑，
+# grep→rg 翻译的差分测试：71+ 组命令分别用真 GNU grep 和翻译后的 rg 跑，
 # 逐行对比输出，退出码也必须一致（Git Bash）
 bash tests/test-translation-diff.sh
+
+# 模糊差分测试：随机生成 标志 x 模式 x 目标 组合，逐例对比（默认 300 例）。
+# FUZZ_SEED 可复现：FUZZ_SEED=7 FUZZ_N=1000 bash tests/test-translation-fuzz.sh
+bash tests/test-translation-fuzz.sh
 ```
 
 差分测试覆盖：单文件/多文件/递归、隐藏目录、`.gitignore` 不生效验证、
@@ -119,11 +123,16 @@ bash tests/test-translation-diff.sh
 ERE（`-E`/`egrep`）、字面量（`-F`/`fgrep`）、BRE 回退验证（`a\{2\}`、裸 `|`、`(...)`）、
 stdin、无匹配退出码等。
 
+模糊测试（fuzz）用随机种子持续轰炸翻译层，已发现并修复了十多类固定用例
+测不到的边界：`-o` 与 context/-c/-v 组合、`-l`+`-c` 优先级、`-x`+`-w` 组合、
+`--exclude` 对显式文件参数生效而 rg -g 不生效、`--exclude-dir` 作用于命令行
+目录参数、相互冲突的模式标志（`-F -E`）等。每次修复都会固化成确定性用例。
+
 **保真度策略：能精确等价才翻译，否则回退真 grep**，所以行为永远不坏。
-已知的有意差异：多文件时 rg 的并行输出顺序可能与 grep 的参数顺序不同
-（内容完全一致，测试按排序后的行集合对比）；`grep pattern 目录`（不带 -r）
-按递归搜索处理（GNU grep 会报 "Is a directory"，但递归搜才是真实意图）；
-`-L`、`-f`（非 fgrep）因退出码/正则方言差异直接回退真 grep。
+已知的有意差异仅剩一处：多文件时 rg 的并行输出顺序可能与 grep 的参数顺序不同
+（内容完全一致，测试按排序后的行集合对比）。
+`-L`、`-f`（非 fgrep）、`-o`+context/count/invert、`-l`+`-c`、`-x`+`-w`、
+冲突的模式标志（`-F -E`）、GRE 转义、目录参数不带 `-r` 等构造全部回退真 grep。
 
 测试会把条目上限降到 50，并自建"小项目/66 条目大目录"的临时树，不依赖真实环境。
 

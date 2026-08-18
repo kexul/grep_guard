@@ -12,42 +12,15 @@
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SG_DIR="$(cd "$SCRIPT_DIR/../shims" && pwd)"
+# shellcheck source=_fixtures.sh
+source "$SCRIPT_DIR/_fixtures.sh"
 
 export BASH_ENV="$SG_DIR/init.sh"
 export PATH="$SG_DIR:$PATH"
 export SEARCH_GUARD_ENTRY_CAP=100000 # fixtures are tiny; never trip the guard
 
 FIX=$(mktemp -d)
-mkdir -p "$FIX/sub" "$FIX/.hidden"
-
-cat > "$FIX/f1.txt" <<'EOF'
-TODO one
-alpha beta
-TODO two TODO two
-Alpha Beta
-zz only here
-aab aab
-word TODOx TODO word
-ctx1
-CTX target
-ctx2
-EOF
-
-cat > "$FIX/f2.md" <<'EOF'
-TODO alpha
-nothing line
-TODO
-foo(bar) literal
-EOF
-
-printf 'TODO nested\nplain\n' > "$FIX/sub/nested.log"
-printf 'TODO hidden\n' > "$FIX/.hidden/secret.txt"
-printf 'TODO space\n' > "$FIX/my file.txt"
-: > "$FIX/empty.txt"
-printf 'TODO\nzz\n' > "$FIX/pats.txt"
-# a .gitignore that must NOT affect either implementation
-printf 'ignored.txt\n' > "$FIX/.gitignore"
-printf 'TODO ignored\n' > "$FIX/ignored.txt"
+make_fixtures "$FIX"
 
 CASES=(
 	# ---- basic patterns, single file ----
@@ -91,6 +64,7 @@ CASES=(
 	'-r --include=*.md TODO .'
 	'-r --exclude=*.md TODO .'
 	'-r --exclude-dir=sub TODO .'
+	'-r --exclude-dir=sub TODO sub'
 	'--recursive -n TODO .'
 
 	# ---- long options ----

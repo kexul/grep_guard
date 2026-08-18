@@ -88,6 +88,9 @@ if [ -z "${__SG_LOADED:-}" ]; then
 		local -a args=() paths=() e_patterns=()
 		local fixed=0 pcre=0 has_pattern=0 pattern="" a i ch
 		local recurse=0 fn_explicit=0 count_flag=0 ere=0
+		local o_flag=0 v_flag=0 w_flag=0 x_flag=0 globs_present=0 l_flag=0
+		local ctx_flag=0
+		local -a xdir_globs=()
 
 		[ "$flavor" = "fgrep" ] && fixed=1
 
@@ -119,13 +122,21 @@ if [ -z "${__SG_LOADED:-}" ]; then
 				shift
 				;;
 			-m[0-9]*) args+=(-m "${a#-m}") ;;
-			-A[0-9]*) args+=(-A "${a#-A}") ;;
-			-B[0-9]*) args+=(-B "${a#-B}") ;;
-			-C[0-9]*) args+=(-C "${a#-C}") ;;
+			-A[0-9]*)
+				args+=(-A "${a#-A}")
+				ctx_flag=1 ;;
+			-B[0-9]*)
+				args+=(-B "${a#-B}")
+				ctx_flag=1 ;;
+			-C[0-9]*)
+				args+=(-C "${a#-C}")
+				ctx_flag=1 ;;
 			--recursive)
 				recurse=1 ;; # rg recurses by default
 			--ignore-case) args+=(-i) ;;
-			--word-regexp) args+=(-w) ;;
+			--word-regexp)
+				args+=(-w)
+				w_flag=1 ;;
 			--line-number) args+=(-n) ;;
 			--no-filename)
 				args+=(-I)
@@ -133,15 +144,23 @@ if [ -z "${__SG_LOADED:-}" ]; then
 			--with-filename)
 				args+=(-H)
 				fn_explicit=1 ;;
-			--files-with-matches) args+=(-l) ;;
+			--files-with-matches)
+				args+=(-l)
+				l_flag=1 ;;
 			--files-without-match) return 1 ;; # -L exit codes differ between grep/rg
 			--count)
 				args+=(-c)
 				count_flag=1
 				;;
-			--invert-match) args+=(-v) ;;
-			--line-regexp) args+=(-x) ;;
-			--only-matching) args+=(-o) ;;
+			--invert-match)
+				args+=(-v)
+				v_flag=1 ;;
+			--line-regexp)
+				args+=(-x)
+				x_flag=1 ;;
+			--only-matching)
+				args+=(-o)
+				o_flag=1 ;;
 			--quiet | --silent) args+=(-q) ;;
 			--no-messages) args+=(--no-messages) ;;
 			--text) args+=(-a) ;;
@@ -165,14 +184,17 @@ if [ -z "${__SG_LOADED:-}" ]; then
 				;;
 			--after-context)
 				args+=(-A "$1")
+				ctx_flag=1
 				shift
 				;;
 			--before-context)
 				args+=(-B "$1")
+				ctx_flag=1
 				shift
 				;;
 			--context)
 				args+=(-C "$1")
+				ctx_flag=1
 				shift
 				;;
 			--color | --colour)
@@ -184,12 +206,25 @@ if [ -z "${__SG_LOADED:-}" ]; then
 				;;
 			--color=* | --colour=*) args+=(--color "${a#*=}") ;;
 			--max-count=*) args+=(-m "${a#*=}") ;;
-			--after-context=*) args+=(-A "${a#*=}") ;;
-			--before-context=*) args+=(-B "${a#*=}") ;;
-			--context=*) args+=(-C "${a#*=}") ;;
-			--include=*) args+=(-g "${a#*=}") ;;
-			--exclude=*) args+=(-g "!${a#*=}") ;;
-			--exclude-dir=*) args+=(-g "!${a#*=}/") ;;
+			--after-context=*)
+				args+=(-A "${a#*=}")
+				ctx_flag=1 ;;
+			--before-context=*)
+				args+=(-B "${a#*=}")
+				ctx_flag=1 ;;
+			--context=*)
+				args+=(-C "${a#*=}")
+				ctx_flag=1 ;;
+			--include=*)
+				args+=(-g "${a#*=}")
+				globs_present=1 ;;
+			--exclude=*)
+				args+=(-g "!${a#*=}")
+				globs_present=1 ;;
+			--exclude-dir=*)
+				args+=(-g "!${a#*=}/")
+				xdir_globs+=("${a#*=}")
+				globs_present=1 ;;
 			--binary-files=text) args+=(-a) ;;
 			-[a-zA-Z0-9]*)
 				# Short flag cluster (e.g. -rin): re-dispatch each letter.
@@ -200,7 +235,9 @@ if [ -z "${__SG_LOADED:-}" ]; then
 					case "$ch" in
 					r | R) recurse=1 ;;
 					i) singles+=(-i) ;;
-					w) singles+=(-w) ;;
+					w)
+						singles+=(-w)
+						w_flag=1 ;;
 					n) singles+=(-n) ;;
 					H)
 						singles+=(-H)
@@ -208,14 +245,22 @@ if [ -z "${__SG_LOADED:-}" ]; then
 					h)
 						singles+=(-I)
 						fn_explicit=1 ;;
-					l) singles+=(-l) ;;
+					l)
+						singles+=(-l)
+						l_flag=1 ;;
 					L) return 1 ;; # -L exit codes differ between grep/rg; use real grep
 					c)
 						singles+=(-c)
 						count_flag=1 ;;
-					v) singles+=(-v) ;;
-					x) singles+=(-x) ;;
-					o) singles+=(-o) ;;
+					v)
+						singles+=(-v)
+						v_flag=1 ;;
+					x)
+						singles+=(-x)
+						x_flag=1 ;;
+					o)
+						singles+=(-o)
+						o_flag=1 ;;
 					q) singles+=(-q) ;;
 					s) singles+=(--no-messages) ;;
 					a) singles+=(-a) ;;
@@ -246,6 +291,37 @@ if [ -z "${__SG_LOADED:-}" ]; then
 		[ $has_pattern -eq 0 ] && return 1
 		__sg_find_rg || return 1
 
+		# Flag combinations whose combined semantics differ between grep and rg.
+		local __sg_modes=$((fixed + ere + pcre))
+		[ $__sg_modes -gt 1 ] && return 1                # -F/-E/-P conflict
+		[ $o_flag -eq 1 ] && { [ $count_flag -eq 1 ] || [ $v_flag -eq 1 ]; } && return 1 # -o+-c, -o+-v
+		[ $x_flag -eq 1 ] && [ $w_flag -eq 1 ] && return 1 # rg ORs them, grep ANDs
+		[ $l_flag -eq 1 ] && [ $count_flag -eq 1 ] && return 1 # grep: -l wins; rg: -c wins
+		[ $o_flag -eq 1 ] && [ $ctx_flag -eq 1 ] && return 1  # grep ignores ctx with -o
+		# rg ignores -g globs for explicit FILE operands; grep's --include/
+		# --exclude apply to them. Bail when any operand is a non-directory.
+		if [ $globs_present -eq 1 ]; then
+			for __sg_p in "${paths[@]:+${paths[@]}}"; do
+				[ -d "$__sg_p" ] || return 1
+			done
+		fi
+		# grep --exclude-dir also skips a matching directory given as an
+		# operand; rg would still search it. Bail in that case.
+		if [ ${#xdir_globs[@]} -gt 0 ]; then
+			for __sg_p in "${paths[@]:+${paths[@]}}"; do
+				[ -d "$__sg_p" ] || continue
+				__sg_base="${__sg_p%/}"
+				__sg_base="${__sg_base##*/}"
+				[ -n "$__sg_base" ] || __sg_base="."
+				for __sg_g in "${xdir_globs[@]}"; do
+					# shellcheck disable=SC2254
+					case "$__sg_base" in
+					$__sg_g) return 1 ;;
+					esac
+				done
+			done
+		fi
+
 		# GNU grep's default mode is BRE, rg has no BRE mode. Some escape
 		# sequences mean different things (\{ \} \( \) \| \+ \? \1-9 \n \t ...):
 		# bail so the real grep handles them. (ERE/-P/-F modes are compatible.)
@@ -267,17 +343,20 @@ if [ -z "${__SG_LOADED:-}" ]; then
 		local -a final=(--no-config --no-heading --color never --hidden --no-ignore --path-separator //)
 		[ $fixed -eq 1 ] && final+=(--fixed-strings)
 		[ $pcre -eq 1 ] && final+=(--pcre2)
+		# Directory operand without -r: real grep errors ("Is a directory"),
+		# so bail instead of silently changing semantics.
+		if [ $recurse -eq 0 ]; then
+			for __sg_p in "${paths[@]:+${paths[@]}}"; do
+				[ -d "$__sg_p" ] && return 1
+			done
+		fi
 		# grep filename rules: names shown for >=2 files or recursion; a single
 		# explicit file prints matches alone. Mimic it.
 		if [ $fn_explicit -eq 0 ]; then
 			if [ $recurse -eq 1 ] || [ ${#paths[@]} -ge 2 ]; then
 				final+=(-H)
 			elif [ ${#paths[@]} -eq 1 ]; then
-				if [ -d "${paths[0]}" ]; then
-					final+=(-H) # directory operand = directory search, shows names
-				else
-					final+=(-I) # bare grep on one file prints matches alone
-				fi
+				final+=(-I) # single non-recursive file prints matches alone
 			fi
 		fi
 		final+=("${args[@]:+${args[@]}}")
