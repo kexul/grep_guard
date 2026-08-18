@@ -6,7 +6,7 @@
 
 agent 的工作目录经常就是用户主目录或某个巨型仓库根目录。模型一旦执行 `grep -r TODO`、`rg pattern` 这类不带范围限制的递归搜索，就要遍历几十万甚至上百万个文件，会话卡死数分钟。
 
-**"哪个目录算大"不能靠猜**——名字、位置都不可靠。grep_guard 在拦截前对搜索根目录做**带配额的实时文件计数探测**（默认最多 15000 个条目或 2 秒，先到即停），数超限才拦截。小目录完全无感放行。
+**"哪个目录算大"不能靠猜**——名字、位置都不可靠。grep_guard 在拦截前对搜索根目录做**带配额的实时文件计数探测**（条目上限按工具区分：grep 系 10000、rg/find 100000；或 2 秒时间预算，先到即停），数超限才拦截。小目录完全无感放行。
 
 ## 三层防护
 
@@ -72,7 +72,7 @@ cp -r shims ~/.pi/agent/shims
 
 | 变量 | 默认值 | 说明 |
 |---|---|---|
-| `SEARCH_GUARD_ENTRY_CAP` | `15000` | 判定"大目录"的条目数上限 |
+| `SEARCH_GUARD_ENTRY_CAP` | 按工具 | 条目数上限（同时覆盖所有工具）。默认按工具区分：`grep/egrep/fgrep` 10000（实测 ~2.4ms/文件），`rg/ag/find` 100000（快 ~50-100 倍），`ls -R`/`dir /s`/`Get-ChildItem -Recurse` 20000 |
 | `SEARCH_GUARD_TIME_BUDGET_MS` | `2000` | 单次探测时间预算 |
 | `SEARCH_GUARD_SHIM_DIR` | `~/.pi/agent/shims` | shims 目录位置 |
 | `SEARCH_GUARD_OFF` | - | `=1` 时完全禁用（模型被拦截时也会被告知这个逃生门） |
@@ -80,7 +80,7 @@ cp -r shims ~/.pi/agent/shims
 被拦截时模型收到的消息形如：
 
 ```
-[search-guard] Blocked: "." (resolved to C:\Users\xxx) holds more than 15000 entries;
+[search-guard] Blocked: "." (resolved to C:\Users\xxx) holds more than 10000 entries;
 a recursive grep here would take far too long.
   Fix: narrow the path (e.g. grep <pattern> ./specific/subdir), add exclusions
   (rg -g '!node_modules'), or inspect the tree first (ls/fd).

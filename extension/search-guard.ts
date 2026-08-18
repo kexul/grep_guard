@@ -11,7 +11,8 @@
  * tracked sequentially, and `bash -c "..."` style wrappers are unwrapped
  * recursively.
  *
- * Tune via env: SEARCH_GUARD_ENTRY_CAP (default 15000),
+ * Tune via env: SEARCH_GUARD_ENTRY_CAP (overrides all tool caps),
+ * per-tool caps: grep 10000, rg/ag/find 100000, ls/dir/gci 20000,
  * SEARCH_GUARD_TIME_BUDGET_MS (default 2000),
  * SEARCH_GUARD_SHIM_DIR (default ~/.pi/agent/shims),
  * SEARCH_GUARD_OFF=1 disables everything.
@@ -69,7 +70,20 @@ function toPosix(p: string): string {
 const SHIM_DIR_POSIX = toPosix(SHIM_DIR);
 const PATH_PREFIX = `PATH="${SHIM_DIR_POSIX}:$PATH"; `;
 
-const ENTRY_CAP = Number(process.env.SEARCH_GUARD_ENTRY_CAP ?? 15_000);
+const ENTRY_CAP_GLOBAL = Number(process.env.SEARCH_GUARD_ENTRY_CAP);
+// Per-tool caps, benchmarked on Windows: grep -r costs ~2.4ms per file,
+// rg/find are ~50-100x faster. SEARCH_GUARD_ENTRY_CAP overrides all of them.
+const CAP_GREP = 10_000;
+const CAP_FAST = 100_000; // rg / ag / find
+const CAP_ENUM = 20_000; // ls -R / dir /s / Get-ChildItem -Recurse
+
+function capForStage(stage: string): number {
+	if (Number.isFinite(ENTRY_CAP_GLOBAL)) return ENTRY_CAP_GLOBAL;
+	if (/\b(?:rg|ripgrep|ag)(?:\.exe)?\b/i.test(stage)) return CAP_FAST;
+	if (FIND_RE.test(stage)) return CAP_FAST;
+	if (/\b(?:grep|egrep|fgrep)(?:\.exe)?\b/i.test(stage)) return CAP_GREP;
+	return CAP_ENUM;
+}
 const TIME_BUDGET_MS = Number(process.env.SEARCH_GUARD_TIME_BUDGET_MS ?? 2_000);
 const DEFAULT_TIMEOUT_SECONDS = 60;
 const CACHE_TTL_MS = 30_000;
@@ -85,8 +99,9 @@ const probeCache = new Map<string, { at: number; result: ProbeResult }>();
  * Count entries under `root`, stopping as soon as ENTRY_CAP or the time
  * budget is exceeded. Never follows symlinks. Result is cached briefly.
  */
-async function probe(root: string): Promise<ProbeResult> {
-	const cached = probeCache.get(root);
+async function probe(root: string, cap: number): Promise<ProbeResult> {
+	const cacheKey = `${root}|${cap}`;
+	const cached = probeCache.get(cacheKey);
 	if (cached && Date.now() - cached.at < CACHE_TTL_MS) return cached.result;
 
 	let count = 0;
@@ -95,7 +110,7 @@ async function probe(root: string): Promise<ProbeResult> {
 	const queue: string[] = [root];
 
 	while (queue.length > 0) {
-		if (count > ENTRY_CAP || Date.now() - started > TIME_BUDGET_MS) {
+		if (count > cap || Date.now() - started > TIME_BUDGET_MS) {
 			truncated = true;
 			break;
 		}
@@ -111,7 +126,7 @@ async function probe(root: string): Promise<ProbeResult> {
 				if (entry.isDirectory()) {
 					queue.push(path.join(batch[i]!, entry.name));
 				}
-				if (count > ENTRY_CAP) {
+				if (count > cap) {
 					truncated = true;
 					break;
 				}
@@ -121,7 +136,7 @@ async function probe(root: string): Promise<ProbeResult> {
 	}
 
 	const result: ProbeResult = { count, truncated };
-	probeCache.set(root, { at: Date.now(), result });
+	probeCache.set(cacheKey, { at: Date.now(), result });
 	return result;
 }
 
@@ -195,10 +210,10 @@ function collectCandidates(
 	return candidates;
 }
 
-function blockMessage(label: string, root: string): string {
+function blockMessage(label: string, root: string, cap: number): string {
 	return (
 		`Blocked: search root ${label} (resolved to ${root}) contains more than ` +
-		`${ENTRY_CAP} files/directories; a recursive search here would hang for a long time. ` +
+		`${cap} files/directories; a recursive search here would hang for a long time. ` +
 		`Narrow the scope: search a specific subdirectory or file (e.g. rg "pattern" ./src/foo), ` +
 		`exclude junk (rg -g '!node_modules'), or inspect the tree first with ls / fd. ` +
 		`If you cannot locate the right subdirectory, ask the user.`
@@ -214,12 +229,13 @@ async function checkCandidates(
 	candidates: Candidate[],
 	cwd: string,
 	cwdKnown: boolean,
+	cap: number,
 ): Promise<string | null> {
 	// No explicit paths: the search defaults to the working directory.
 	if (candidates.length === 0) {
 		if (!cwdKnown) return UNKNOWN_CWD_MESSAGE;
-		const { truncated } = await probe(cwd);
-		return truncated ? blockMessage("the current working directory", cwd) : null;
+		const { truncated } = await probe(cwd, cap);
+		return truncated ? blockMessage("the current working directory", cwd, cap) : null;
 	}
 
 	for (const c of candidates) {
@@ -232,8 +248,8 @@ async function checkCandidates(
 		}
 		if (!stat.isDirectory()) continue; // single files are fine
 
-		const { truncated } = await probe(c.abs);
-		if (truncated) return blockMessage(`"${c.raw}"`, c.abs);
+		const { truncated } = await probe(c.abs, cap);
+		if (truncated) return blockMessage(`"${c.raw}"`, c.abs, cap);
 	}
 	return null;
 }
@@ -309,13 +325,14 @@ async function scanCommand(
 		if (!SEARCH_PATTERNS.some((re) => re.test(stage))) continue;
 		isSearch = true;
 
+		const cap = capForStage(stage);
 		const candidates = collectCandidates(
 			stage.trim(),
 			cwd,
 			FIND_RE.test(stage),
 			PATTERN_FIRST_RE.test(stage),
 		);
-		const reason = await checkCandidates(candidates, cwd, cwdKnown);
+		const reason = await checkCandidates(candidates, cwd, cwdKnown, cap);
 		if (reason) return { block: reason, cwd, isSearch };
 	}
 

@@ -12,21 +12,35 @@
  *             3 = could not decide (allow, fail-open).
  *
  * Env: SEARCH_GUARD_OFF=1 disables the guard,
- *      SEARCH_GUARD_ENTRY_CAP (default 15000),
+ *      SEARCH_GUARD_ENTRY_CAP overrides the cap for ALL tools,
  *      SEARCH_GUARD_TIME_BUDGET_MS (default 2000).
+ *
+ * Per-tool default caps (benchmarked on Windows: grep -r costs ~2.4ms/file,
+ * rg and find are ~50-100x faster):
+ *   grep/egrep/fgrep: 10000   (≈4-25s search time)
+ *   rg/ag/find:      100000   (≈1-2s search time)
  */
 
 import { readdirSync, statSync, readFileSync, writeFileSync } from "node:fs";
 import * as path from "node:path";
 import * as os from "node:os";
 
-const CAP = Number(process.env.SEARCH_GUARD_ENTRY_CAP ?? 15_000);
+const tool = process.argv[2] ?? "";
+const argv = process.argv.slice(3);
+
+const GLOBAL_CAP = Number(process.env.SEARCH_GUARD_ENTRY_CAP);
+const TOOL_CAPS = {
+	grep: 10_000,
+	egrep: 10_000,
+	fgrep: 10_000,
+	rg: 100_000,
+	ag: 100_000,
+	find: 100_000,
+};
+const CAP = Number.isFinite(GLOBAL_CAP) ? GLOBAL_CAP : TOOL_CAPS[tool] ?? 10_000;
 const TIME_MS = Number(process.env.SEARCH_GUARD_TIME_BUDGET_MS ?? 2_000);
 const TTL_MS = 30_000;
 const CACHE_FILE = path.join(os.tmpdir(), "search-guard-probe-cache.json");
-
-const tool = process.argv[2] ?? "";
-const argv = process.argv.slice(3);
 
 if (process.env.SEARCH_GUARD_OFF) process.exit(0);
 if (argv.includes("--help") || argv.includes("--version")) process.exit(0);
@@ -85,7 +99,7 @@ function loadCache() {
 const cache = loadCache();
 
 function probeCached(abs) {
-	const key = abs.toLowerCase();
+	const key = `${abs.toLowerCase()}|${CAP}`;
 	const hit = cache[key];
 	if (hit) return { count: hit.c ?? 0, truncated: !!hit.tr };
 	const result = probe(abs);
