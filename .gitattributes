@@ -1,0 +1,12 @@
+# Shell scripts must keep LF line endings (bash on Windows chokes on CRLF).
+*.sh text eol=lf
+*.mjs text eol=lf
+*.ts text eol=lf
+
+# shims are copied under tool names (grep, rg, find, ...) — keep them text too.
+shims/grep text eol=lf
+shims/egrep text eol=lf
+shims/fgrep text eol=lf
+shims/rg text eol=lf
+shims/ag text eol=lf
+shims/find text eol=lf
