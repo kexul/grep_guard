@@ -58,13 +58,15 @@ is_recursive() { # exact per-flag match (substring tests give false hits)
 	return 1
 }
 
-run_parts() { # run_parts <args...>: builds a properly quoted command
+run_parts() { # run_parts <tool> <args...>: builds a properly quoted command
+	local tool="$1"
+	shift
 	local cmdstr
 	cmdstr=$(printf '%q ' "$@")
 	local real_out tr_out real_rc tr_rc
-	real_out=$(cd "$FIX" && SEARCH_GUARD_GREP_AS_RG=0 bash -c "grep $cmdstr" 2>/dev/null | LC_ALL=C sort; exit "${PIPESTATUS[0]:-0}")
+	real_out=$(cd "$FIX" && SEARCH_GUARD_GREP_AS_RG=0 bash -c "$tool $cmdstr" 2>/dev/null | LC_ALL=C sort; exit "${PIPESTATUS[0]:-0}")
 	real_rc=$?
-	tr_out=$(cd "$FIX" && bash -c "grep $cmdstr" 2>/dev/null | LC_ALL=C sort; exit "${PIPESTATUS[0]:-0}")
+	tr_out=$(cd "$FIX" && bash -c "$tool $cmdstr" 2>/dev/null | LC_ALL=C sort; exit "${PIPESTATUS[0]:-0}")
 	tr_rc=$?
 	if [ "$real_out" = "$tr_out" ] && [ "$real_rc" = "$tr_rc" ]; then
 		pass=$((pass+1))
@@ -102,10 +104,29 @@ for ((n = 0; n < FUZZ_N; n++)); do
 		esac
 	fi
 
-	run_parts "${args[@]:+${args[@]}}" "$pat" $target
+	run_parts grep "${args[@]:+${args[@]}}" "$pat" $target
+done
+
+# --- find -> rg --files fuzz ---
+FIND_NAMEFLAGS=("-name" "-iname")
+FIND_GLOBS=('*.txt' '*.md' '*.log' '*' 'f1*' 'nested*' 'x*.txt' '*e*' 'secret*')
+FIND_ROOTS=(. sub .hidden f1.txt 'sub .hidden')
+
+for ((n = 0; n < FUZZ_N / 4; n++)); do
+	fargs=(-type f)
+	if [ $((RANDOM % 2)) -eq 0 ]; then
+		fargs+=(-maxdepth $((RANDOM % 3 + 1)))
+	fi
+	fargs+=("${FIND_NAMEFLAGS[$((RANDOM % 2))]}")
+	fargs+=("${FIND_GLOBS[$((RANDOM % ${#FIND_GLOBS[@]}))]}")
+	# occasionally a second -o -name clause
+	if [ $((RANDOM % 3)) -eq 0 ]; then
+		fargs+=(-o -name "${FIND_GLOBS[$((RANDOM % ${#FIND_GLOBS[@]}))]}")
+	fi
+	run_parts find "${fargs[@]}" ${FIND_ROOTS[$((RANDOM % ${#FIND_ROOTS[@]}))]}
 done
 
 echo
-echo "seed=$SEED pass=$pass fail=$fail"
+echo "seed=$SEED pass=$pass fail=$fail (grep cases=$FUZZ_N, find cases=$((FUZZ_N / 4)))"
 rm -rf "$FIX"
 [ "$fail" -eq 0 ]

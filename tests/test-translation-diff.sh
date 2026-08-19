@@ -116,12 +116,31 @@ CASES=(
 	# ---- no match (exit code 1 on both sides) ----
 	'zzzz f1.txt'
 	'-r zzzz .'
+
+	# ---- find -> rg --files mapping (+ faithful fallback cases) ----
+	'find . -type f -name "*.txt"'
+	'find sub -type f -name "*.log"'
+	'find . -type f -iname "*.MD"'
+	'find . -type f -name "*.log" -o -name "*.md"'
+	'find . -type f -name "*"'
+	'find . -maxdepth 1 -type f -name "*"'
+	'find f1.txt -type f -name "f1.txt"'
+	'find . -type f -maxdepth 2 -name "*.md"'
+	'find . -type f -name "*.txt" -o -name "*.md"'
+	'find sub .hidden -type f -name "*"'
+	'find sub -type f -name "*.log" -print'
+	'find . -type f -name "*.nope"'
+	'find . -type d -name "sub"'
+	'find . -type f ! -name "*.md"'
+	'find . -name "*.ts"'
+	'find missing_dir -type f -name "*"'
 )
 
 pass=0; fail=0
 for c in "${CASES[@]}"; do
 	case "$c" in
-	pipe*) cmd="${c#pipe }" ;; # full pipeline, don't prefix with grep
+	pipe*) cmd="${c#pipe }" ;; # full pipeline, don't prefix
+	find*) cmd="$c" ;;          # find -> rg --files mapping
 	*) cmd="grep $c" ;;
 	esac
 	real_out=$(cd "$FIX" && SEARCH_GUARD_GREP_AS_RG=0 bash -c "$cmd" 2>/dev/null | LC_ALL=C sort; exit "${PIPESTATUS[0]:-0}")

@@ -114,6 +114,13 @@ t_route "strict: 缺失目标回退" fallback "grep TODO no_such_file.xyz"
 t_route "strict: --include 回退" fallback "grep -rn --include='*.ts' TODO ./src"
 t_out "strict: 翻译结果仍正确" "src/a.ts:1:TODO a" "SEARCH_GUARD_GREP_AS_RG=strict grep -rn TODO ./src"
 
+# --- find -> rg --files mapping ---
+t_out "find -type f -name 翻译为 rg --files" "src/a.ts" "find . -type f -name '*.ts'"
+t_out "find -iname 大小写不敏感" "src/b.ts" "find . -type f -iname '*.TS'"
+t "find 大目录仍被拦截" blocked "find '$BIG' -type f -name '*'"
+t_route "strict: find 核心被翻译" translated "find . -type f -name '*.ts'"
+t_route "strict: find -exec 回退" fallback "find src -type f -name '*.ts' -exec echo {} ;"
+
 echo
 echo "pass=$pass fail=$fail"
 rm -rf "$BASE"

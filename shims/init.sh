@@ -463,10 +463,105 @@ if [ -z "${__SG_LOADED:-}" ]; then
 		__SG_PROBED=1 PATH="$__sg_clean_path" command ag "$@"
 	}
 
+	__sg_find_to_rg() {
+		# Translate find -> rg --files (same order-of-magnitude speedup as the
+		# grep mapping). Only the file-enumeration subset is translatable:
+		# rg --files lists files, so -type f is required; -exec/-mtime/-size/...
+		# bail immediately.
+		local -a roots=() sglobs=() iglobs=()
+		local have_type_f=0 null_out=0 expr_started=0 a g
+		local maxdepth=""
+		while [ $# -gt 0 ]; do
+			a="$1"
+			shift
+			if [ $expr_started -eq 0 ]; then
+				case "$a" in
+				-P) continue ;; # default: don't follow symlinks
+				-H | -L | -D* | -O*) return 1 ;;
+				-*) expr_started=1 ;; # fall through to expression handling
+				*)
+					roots+=("$a")
+					continue ;;
+				esac
+			fi
+			case "$a" in
+			-name)
+				sglobs+=("$1")
+				shift ;;
+			-iname)
+				iglobs+=("$1")
+				shift ;;
+			-o) ;; # rg combines globs with OR anyway
+			-type)
+				[ "$1" = "f" ] || return 1
+				have_type_f=1
+				shift ;;
+			-maxdepth)
+				maxdepth="$1"
+				shift ;;
+			-print) ;; # the default action
+			-print0) null_out=1 ;;
+			-depth) ;; # traversal order only; output set identical
+			*) return 1 ;;
+			esac
+		done
+
+		[ $have_type_f -eq 1 ] || return 1 # rg --files cannot match directories
+		[ ${#roots[@]} -gt 0 ] || return 1
+		__sg_find_rg || return 1
+		for a in "${roots[@]}"; do
+			[ -e "$a" ] || return 1 # keep find's exact error behavior
+		done
+
+		local -a final=(--no-config --files --hidden --no-ignore --path-separator //)
+		for g in "${sglobs[@]:+${sglobs[@]}}"; do
+			final+=(-g "$g")
+		done
+		for g in "${iglobs[@]:+${iglobs[@]}}"; do
+			final+=(--iglob "$g")
+		done
+		[ -n "$maxdepth" ] && final+=(--max-depth "$maxdepth")
+		[ $null_out -eq 1 ] && final+=(-0)
+		final+=("${roots[@]}")
+		__sg_rg_args=("${final[@]}")
+		return 0
+	}
+
+	__sg_strict_find_ok() {
+		# strict gate for the find mapping: glob values must stay in the safe
+		# charset (no bracket classes, no backslashes).
+		local re='^[A-Za-z0-9 *_?.-]+$'
+		local prev="" a
+		for a in "$@"; do
+			case "$prev" in
+			-name | -iname)
+				[[ "$a" =~ $re ]] || return 1 ;;
+			esac
+			prev="$a"
+		done
+		return 0
+	}
+
 	find() {
 		if __sg_active; then
 			__sg_check find "$@" || return 1
 		fi
+		local mode="${SEARCH_GUARD_GREP_AS_RG:-1}" translate=0
+		case "$mode" in
+		0) translate=0 ;;
+		strict) __sg_strict_find_ok "$@" && translate=1 ;;
+		*) translate=1 ;;
+		esac
+		if [ $translate -eq 1 ] && __sg_find_to_rg "$@"; then
+			[ -n "${SEARCH_GUARD_DEBUG:-}" ] &&
+				echo "[search-guard] translated to: $__sg_rg_path ${__sg_rg_args[*]}" >&2
+			__SG_PROBED=1 command "$__sg_rg_path" "${__sg_rg_args[@]}"
+			local rc=$?
+			[ $rc -eq 1 ] && rc=0 # find exits 0 when nothing matched; rg exits 1
+			return $rc
+		fi
+		[ -n "${SEARCH_GUARD_DEBUG:-}" ] &&
+			echo "[search-guard] fallback to real find" >&2
 		__SG_PROBED=1 PATH="$__sg_clean_path" command find "$@"
 	}
 fi

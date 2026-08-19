@@ -47,16 +47,28 @@ pi 扩展（`extension/search-guard.ts`）在 `tool_call` 事件解析命令文�
 
 所有放行的递归搜索若未指定超时，自动注入 60 秒 timeout。
 
-### 附赠：grep → rg 透明加速
+### 附赠：grep / find → rg 透明加速
 
 实测数据（Windows/NTFS，15000 个文件）：`grep -r` 耗时 6.3 秒（~2.4ms/文件），`rg` 只需 0.14 秒——慢 45 倍。因此 `grep`/`egrep`/`fgrep` 调用会被**透明翻译成等价的 rg**：
 
 - 覆盖常用标志：`-r -i -w -n -l -c -v -x -o -q -m -A -B -C -e -f -F -E -P -H -h -Z`、`--include/--exclude/--exclude-dir`、短选项组合（`-rin`）等
 - 语义对齐：`--no-config`（忽略 ripgrep 配置）、`--hidden --no-ignore`（等价 grep -r 扫隐藏目录/无视 .gitignore）、grep 的文件名显示规则（单文件不加前缀、多文件/递归加前缀）、`--path-separator //`（防 MSYS 路径转换）
-- 翻译不了的构造（未知标志等）**自动回退到真 grep**，行为永远不壊
+- 翻译不了的构造（未知标志等）**自动回退到真 grep**，行为永远不坏
 - `SEARCH_GUARD_GREP_AS_RG=0` 可关闭翻译
 
 典型效果：agent 写 `grep -rn TODO .` ，自动获得 ~50 倍速度，并且先过守卫探测。
+
+**find 也同理翻译为 `rg --files`**（find 在 Windows 上同样慢）。只翻译文件枚举子集：
+
+```
+find [路径...] [-maxdepth N] -type f [-name G | -iname G]... [-o ...] [-print0]
+  → rg --no-config --files --hidden --no-ignore --path-separator // [-g G | --iglob G]... [--max-depth N] [-0] 路径...
+```
+
+- 必须有 `-type f`（rg --files 只列文件，无法匹配目录）
+- `-name`→`-g`、`-iname`→`--iglob`、`-o` 天然对应 rg 的 glob OR、`-print0`→`-0`
+- 退出码对齐：find 无匹配退出 0（错误才非 0），rg 无匹配退出 1——包装层做了归一化
+- `-exec`、`-delete`、`-size`、`-mtime`、`-type d`、`-regex` 等无法等价的构造全部回退真 find
 
 ## 一致性的层次（为什么不能"逐字节完全一致"）
 
