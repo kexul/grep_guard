@@ -72,6 +72,9 @@ t "嵌套 bash -c" blocked "bash -c \"cd '$BIG' && rg TODO .\""
 t "for 循环中的 grep" blocked "for p in '$BIG'; do grep -r TODO \"\$p\"; done"
 t "SEARCH_GUARD_OFF 旁路" allowed "SEARCH_GUARD_OFF=1 rg TODO '$BIG/d0'"
 t "find 小子目录" allowed "find '$BIG/d0' -name '*.txt'"
+t "find -maxdepth 1 浅层放行" allowed "find '$BIG' -maxdepth 1 -type f -name '*'"
+t "find -maxdepth 2 超限仍拦" blocked "find '$BIG' -maxdepth 2 -type f"
+t "rg --max-depth 1 浅层放行" allowed "rg --max-depth 1 TODO '$BIG'"
 
 # --- PATH shim layer (xargs / command bypasses the functions) ---
 shim_only "command rg 绕过函数走 shim" blocked "rg TODO '$BIG'"

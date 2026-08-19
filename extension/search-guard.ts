@@ -84,6 +84,13 @@ function capForStage(stage: string): number {
 	if (/\b(?:grep|egrep|fgrep)(?:\.exe)?\b/i.test(stage)) return CAP_GREP;
 	return CAP_ENUM;
 }
+
+/** Depth limit from the command text (find -maxdepth / rg --max-depth / -d /
+ * PowerShell -Depth). grep -d takes an action word, never a number. */
+function maxDepthForStage(stage: string): number {
+	const m = stage.match(/(?:-maxdepth|--max-depth|-d|-Depth)(?:=|\s+)(\d+)/i);
+	return m ? Number(m[1]) : Infinity;
+}
 const TIME_BUDGET_MS = Number(process.env.SEARCH_GUARD_TIME_BUDGET_MS ?? 2_000);
 const DEFAULT_TIMEOUT_SECONDS = 60;
 const CACHE_TTL_MS = 30_000;
@@ -99,15 +106,15 @@ const probeCache = new Map<string, { at: number; result: ProbeResult }>();
  * Count entries under `root`, stopping as soon as ENTRY_CAP or the time
  * budget is exceeded. Never follows symlinks. Result is cached briefly.
  */
-async function probe(root: string, cap: number): Promise<ProbeResult> {
-	const cacheKey = `${root}|${cap}`;
+async function probe(root: string, cap: number, maxDepth = Infinity): Promise<ProbeResult> {
+	const cacheKey = `${root}|${cap}|${maxDepth}`;
 	const cached = probeCache.get(cacheKey);
 	if (cached && Date.now() - cached.at < CACHE_TTL_MS) return cached.result;
 
 	let count = 0;
 	let truncated = false;
 	const started = Date.now();
-	const queue: string[] = [root];
+	const queue: Array<[string, number]> = [[root, 0]];
 
 	while (queue.length > 0) {
 		if (count > cap || Date.now() - started > TIME_BUDGET_MS) {
@@ -115,16 +122,18 @@ async function probe(root: string, cap: number): Promise<ProbeResult> {
 			break;
 		}
 		const batch = queue.splice(0, 64);
+		const listable = batch.filter(([, depth]) => depth < maxDepth);
 		const listings = await Promise.all(
-			batch.map((dir) =>
+			listable.map(([dir]) =>
 				fs.readdir(dir, { withFileTypes: true }).catch(() => []),
 			),
 		);
 		for (let i = 0; i < listings.length; i++) {
+			const [, depth] = listable[i]!;
 			for (const entry of listings[i] ?? []) {
 				count += 1;
 				if (entry.isDirectory()) {
-					queue.push(path.join(batch[i]!, entry.name));
+					queue.push([path.join(listable[i]![0], entry.name), depth + 1]);
 				}
 				if (count > cap) {
 					truncated = true;
@@ -230,11 +239,12 @@ async function checkCandidates(
 	cwd: string,
 	cwdKnown: boolean,
 	cap: number,
+	maxDepth = Infinity,
 ): Promise<string | null> {
 	// No explicit paths: the search defaults to the working directory.
 	if (candidates.length === 0) {
 		if (!cwdKnown) return UNKNOWN_CWD_MESSAGE;
-		const { truncated } = await probe(cwd, cap);
+		const { truncated } = await probe(cwd, cap, maxDepth);
 		return truncated ? blockMessage("the current working directory", cwd, cap) : null;
 	}
 
@@ -248,7 +258,7 @@ async function checkCandidates(
 		}
 		if (!stat.isDirectory()) continue; // single files are fine
 
-		const { truncated } = await probe(c.abs, cap);
+		const { truncated } = await probe(c.abs, cap, maxDepth);
 		if (truncated) return blockMessage(`"${c.raw}"`, c.abs, cap);
 	}
 	return null;
@@ -326,13 +336,14 @@ async function scanCommand(
 		isSearch = true;
 
 		const cap = capForStage(stage);
+		const maxDepth = maxDepthForStage(stage);
 		const candidates = collectCandidates(
 			stage.trim(),
 			cwd,
 			FIND_RE.test(stage),
 			PATTERN_FIRST_RE.test(stage),
 		);
-		const reason = await checkCandidates(candidates, cwd, cwdKnown, cap);
+		const reason = await checkCandidates(candidates, cwd, cwdKnown, cap, maxDepth);
 		if (reason) return { block: reason, cwd, isSearch };
 	}
 

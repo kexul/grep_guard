@@ -47,11 +47,28 @@ if (argv.includes("--help") || argv.includes("--version")) process.exit(0);
 
 /* ---------- probe with entry cap + time budget ---------- */
 
-function probe(root) {
+/** Detect a depth limit in the final argv: find -maxdepth / rg --max-depth /
+ * rg -d (for rg/ag only; grep -d takes an action word, not a number). */
+function maxDepthOf(toolName, args) {
+	for (let i = 0; i < args.length; i++) {
+		const a = args[i];
+		let m;
+		if ((m = a.match(/^--max-depth=(\d+)$/))) return Number(m[1]);
+		if (a === "-maxdepth" && toolName === "find" && /^\d+$/.test(args[i + 1] ?? "")) {
+			return Number(args[i + 1]);
+		}
+		if ((a === "--max-depth" || a === "-d") && (toolName === "rg" || toolName === "ag") && /^\d+$/.test(args[i + 1] ?? "")) {
+			return Number(args[i + 1]);
+		}
+	}
+	return Infinity;
+}
+
+function probe(root, maxDepth = Infinity) {
 	let count = 0;
 	let truncated = false;
 	const started = Date.now();
-	const queue = [root];
+	const queue = [[root, 0]];
 
 	while (queue.length > 0) {
 		if (count > CAP || Date.now() - started > TIME_MS) {
@@ -59,7 +76,8 @@ function probe(root) {
 			break;
 		}
 		const batch = queue.splice(0, 64);
-		for (const dir of batch) {
+		for (const [dir, depth] of batch) {
+			if (depth >= maxDepth) continue; // -maxdepth: stop descending
 			let entries;
 			try {
 				entries = readdirSync(dir, { withFileTypes: true });
@@ -68,14 +86,15 @@ function probe(root) {
 			}
 			for (const e of entries) {
 				count += 1;
-				if (e.isDirectory()) queue.push(path.join(dir, e.name));
+				if (e.isDirectory()) queue.push([path.join(dir, e.name), depth + 1]);
 				if (count > CAP) {
 					truncated = true;
-					break;
+				break;
 				}
 			}
 			if (truncated) break;
 		}
+		if (truncated) break;
 	}
 	return { count, truncated };
 }
@@ -98,11 +117,11 @@ function loadCache() {
 
 const cache = loadCache();
 
-function probeCached(abs) {
-	const key = `${abs.toLowerCase()}|${CAP}`;
+function probeCached(abs, maxDepth) {
+	const key = `${abs.toLowerCase()}|${CAP}|${maxDepth}`;
 	const hit = cache[key];
 	if (hit) return { count: hit.c ?? 0, truncated: !!hit.tr };
-	const result = probe(abs);
+	const result = probe(abs, maxDepth);
 	cache[key] = { t: Date.now(), c: result.count, tr: result.truncated };
 	try {
 		writeFileSync(CACHE_FILE, JSON.stringify(cache));
@@ -196,6 +215,7 @@ function block(rawLabel, abs) {
 
 try {
 	let roots = collectRoots(tool, argv);
+	const maxDepth = maxDepthOf(tool, argv);
 
 	// No paths: rg/ag read stdin when it is piped (no disk scan => allow).
 	// grep/find always fall back to "." regardless of stdin.
@@ -223,7 +243,7 @@ try {
 		}
 		if (!stat.isDirectory()) continue; // single files are fine
 
-		const { truncated } = probeCached(abs);
+		const { truncated } = probeCached(abs, maxDepth);
 		if (truncated) block(`"${raw}"`, abs);
 	}
 	process.exit(0);

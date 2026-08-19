@@ -61,6 +61,8 @@ const cases = [
 	["rg 扫大目录", `rg TODO ${big}`, undefined, project, true],
 	["rg 扫大目录的子目录(放行)", `rg TODO ${big}/d0`, undefined, project, false, 60],
 	["find 扫大目录", `find ${big} -name "*.ts"`, undefined, project, true],
+	["find -maxdepth 浅层受限放行", `find ${big} -maxdepth 1 -name "*.ts"`, undefined, project, false, 60],
+	["rg --max-depth 浅层受限放行", `rg --max-depth 1 TODO ${big}`, undefined, project, false, 60],
 	["Get-ChildItem -Recurse 大目录", `Get-ChildItem -Recurse ${big}`, undefined, project, true],
 	["ls -R 大目录", `ls -R ${big}`, undefined, project, true],
 	["管道 rg 读 stdin(home 下也放行)", `cat build.log | rg error`, undefined, home, false],
